@@ -16,7 +16,7 @@ logger.propagate = False
 
 DEFAULT_FRONTEND_DIR = files("circuit_tracer") / "frontend/assets"
 
-# 全局数据库管理器实例和锁
+# Global database manager instance and lock
 _global_db_manager = None
 _db_lock = threading.Lock()
 
@@ -50,10 +50,10 @@ class DatabaseManager:
         self.connection.commit()
 
     def upsert_data(self, data_list):
-        # 使用锁保护数据库写入操作
+        # Protect database write operations with lock
         with _db_lock:
             for index_val, content_val in json.loads(data_list):
-                # 使用 ON DUPLICATE KEY UPDATE 实现 upsert
+                # Use ON DUPLICATE KEY UPDATE to implement upsert
                 query = """
                     INSERT INTO clerps (index_col, content) 
                     VALUES (%s, %s) 
@@ -63,7 +63,7 @@ class DatabaseManager:
             self.connection.commit()
 
     def get_all_data(self):
-        # 使用锁保护数据库读取操作
+        # Protect database read operations with lock
         with _db_lock:
             select_query = "SELECT index_col, content FROM clerps"
             self.cursor.execute(select_query)
@@ -83,11 +83,11 @@ class DatabaseManager:
 
 
 def get_global_db_manager():
-    """获取全局数据库管理器实例"""
+    """Get the global database manager instance"""
     global _global_db_manager
     if _global_db_manager is None:
         with _db_lock:
-            # 双重检查锁定模式 (Double-checked locking pattern)
+            # Double-checked locking pattern
             if _global_db_manager is None:
                 _global_db_manager = DatabaseManager(
                     host='8.135.11.160',
@@ -118,7 +118,7 @@ class ReusableTCPServer(socketserver.TCPServer):
 class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, frontend_dir, data_dir, **kwargs):
         self.data_dir = data_dir
-        # 使用全局数据库管理器而不是创建新实例
+        # Use the global database manager instead of creating a new instance
         self.db_manager = get_global_db_manager()
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
 
@@ -305,7 +305,7 @@ class Server:
         except Exception as e:
             logger.debug(f"Error during server_close: {e}")
 
-        # 关闭全局数据库连接
+        # Close the global database connection
         global _global_db_manager
         if _global_db_manager is not None:
             try:

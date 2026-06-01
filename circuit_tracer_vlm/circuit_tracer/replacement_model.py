@@ -551,11 +551,11 @@ class ReplacementModel(HookedVLTransformer):
 
         print(mlp_in_cache.shape, mlp_in_cache.dtype)
 
-        print(f"r416 已分配显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+
 
         attribution_data = self.transcoders.compute_attribution_components(mlp_in_cache)
 
-        print(f"r420 已分配显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+
 
         # Compute error vectors
         error_vectors = mlp_out_cache - attribution_data["reconstruction"]

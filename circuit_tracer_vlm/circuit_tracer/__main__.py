@@ -240,19 +240,16 @@ def run_attribution(args, parser):
         lazy_decoder=args.lazy_decoder,
     )
 
-    print(f"m225 已分配显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
     args.model = args.model or config.get("model_name", None)
     if not args.model:
         parser.error("--model must be specified when not provided in transcoder config")
 
-    print(f"m231 已分配显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
     model_instance = ReplacementModel.from_pretrained_and_transcoders(
         args.model, transcoder, dtype=dtype
     )
 
-    print(f"m237 已分配显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
     logging.info("Running attribution...")
     graph = attribute(
@@ -267,7 +264,6 @@ def run_attribution(args, parser):
         image_path=args.image
     )
 
-    print(f"m251 已分配显存: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
     # Save to file if output path specified
     if args.graph_output_path:
