@@ -5,24 +5,6 @@ import time
 import warnings
 
 
-from pathlib import Path
-
-script_path = Path(__file__).absolute()
-
-import sys
-try:
-    if "jyang28" in str(script_path):
-        sys.path.append("/work/nvme/bewu/jyang28/vlm-tracing/third_party/TransformerLens")
-        sys.path.append("/work/nvme/bewu/jyang28/vlm-tracing")
-    else:
-        sys.path.append("/work/nvme/bfga/tianhux2/vlm-tracing/third_party/TransformerLens")
-        sys.path.append("/work/nvme/bfga/tianhux2/vlm-tracing")
-    
-    import transformer_lens as lens  # Some python problem causes this to throw on the first import
-except:
-    import transformer_lens as lens
-
-
 def main():
     # Configure logging
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

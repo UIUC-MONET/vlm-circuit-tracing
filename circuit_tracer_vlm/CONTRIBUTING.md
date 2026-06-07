@@ -1,72 +1,65 @@
 # Contributing to circuit-tracer
 
-Thank you for your interest in contributing to circuit-tracer! We appreciate the community involvement we've seen so far and welcome contributions.
+Thank you for your interest in contributing. This repository is under active development, and we maintain it on a best-effort basis.
 
-## Important Notes
+## Scope
 
-### Maintenance Bandwidth
+The current public package supports VLM circuit tracing with released Gemma3-4B-IT transcoders. Contributions are most useful when they improve:
 
-We maintain this project on a **best-effort basis**.
+- VLM attribution graph computation,
+- graph export and local visualization,
+- image-token attention maps,
+- packaging, documentation, tests, and reliability.
 
-- PR reviews may take time and we cannot guarantee timely responses or merges
-- Issues may not receive immediate attention
+Training per-layer transcoders is not included in this release yet.
 
-### API Stability
+## Development Install
 
-⚠️ **Warning**: This library is under active development and **breaking changes are possible**. The API is not stable and breaking changes may occur in any release.
-
-## How to Contribute
-
-We encourage contributions! Here's how you can help:
-
-1. **Make your changes** with clear, descriptive commits
-2. **Test your changes** - see Testing section below
-3. **Submit a Pull Request** with a clear description of your changes
-
-## Installing with dev dependencies
+Install the bundled TransformerLens fork first, then install the VLM circuit tracer with dev dependencies:
 
 ```bash
+pip install -e ../third_party/TransformerLens
 pip install -e ".[dev]"
 ```
 
-## Linting / formatting
+If you are installing from the repository root instead:
 
-We use `ruff check` and `ruff format` for code quality. When contributing:
+```bash
+pip install -e third_party/TransformerLens
+pip install -e "circuit_tracer_vlm[dev]"
+```
 
-- Run `ruff check` and `ruff format` on your changes
-- Run existing tests to ensure nothing breaks
-- Check that relevant demo notebooks still execute correctly, particularly:
+The bundled TransformerLens fork is required because VLM tracing uses `HookedVLTransformer`.
 
-  - `demos/circuit_tracing_tutorial.ipynb`
-  - `demos/attribute_demo.ipynb`
-  - `demos/intervention_demo.ipynb`
+## Testing
 
-  ## Tests
+Run the test suite before submitting a pull request:
 
-We use `pytest` for testing. When contributing:
+```bash
+pytest
+```
 
-- Add tests for new functionality where possible
-- Run `pytest` before submitting a PR
+Some tests or workflows may require model/transcoder downloads and GPU memory. For changes that touch attribution, graph export, or attention maps, please note what hardware and model weights you used for validation.
 
-## Type checking
+## Linting And Type Checking
 
-We use `pyright` for type checking. When contributing:
+Use the project tools before submitting:
 
-- Run `pyright` before submitting a PR
+```bash
+ruff check
+ruff format
+pyright
+```
 
-## What We're Looking For
+## Pull Requests
 
-- Bug fixes
-- Performance enhancements
-- New features that align with the project's goals
-- In future: updates to support new models or transcoders (currently blocked on our pipeline for generating feature activation examples)
+When opening a pull request:
 
-## Before Contributing
+- describe the VLM workflow affected by the change,
+- include reproduction or validation steps,
+- mention any model weights, images, prompts, or GPU assumptions,
+- avoid adding cluster-specific paths, credentials, or private service dependencies.
 
-- Check existing issues and PRs to avoid duplicate work
-- For major changes, consider opening an issue first to discuss the approach
-- Understand that we cannot commit to reviewing all changes
+## API Stability
 
-## Code of Conduct
-
-Please be respectful and constructive in all interactions.
+This library is under active development. Breaking changes are possible as the VLM tracing pipeline becomes more complete.

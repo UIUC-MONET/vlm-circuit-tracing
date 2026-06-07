@@ -9,94 +9,11 @@ import socketserver
 import threading
 from importlib.resources import files
 from pathlib import Path
-import mysql.connector # pip install mysql-connector-python
 
 logger = logging.getLogger(__name__)
 logger.propagate = False
 
 DEFAULT_FRONTEND_DIR = files("circuit_tracer") / "frontend/assets"
-
-# Global database manager instance and lock
-_global_db_manager = None
-_db_lock = threading.Lock()
-
-
-class DatabaseManager:
-    def __init__(self, host, database, user, password, port=3306):
-        try:
-            self.connection = mysql.connector.connect(
-                host=host,
-                database=database,
-                user=user,
-                password=password,
-                port=port
-            )
-            if self.connection.is_connected():
-                self.cursor = self.connection.cursor()
-                self._init_table()
-        except Exception as e:
-            logger.exception(f"Error while connecting to MySQL: {e}")
-            raise
-
-    def _init_table(self):
-        create_table_query = '''
-            CREATE TABLE IF NOT EXISTS clerps (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                index_col VARCHAR(255) NOT NULL UNIQUE,
-                content TEXT
-            )
-        '''
-        self.cursor.execute(create_table_query)
-        self.connection.commit()
-
-    def upsert_data(self, data_list):
-        # Protect database write operations with lock
-        with _db_lock:
-            for index_val, content_val in json.loads(data_list):
-                # Use ON DUPLICATE KEY UPDATE to implement upsert
-                query = """
-                    INSERT INTO clerps (index_col, content) 
-                    VALUES (%s, %s) 
-                    ON DUPLICATE KEY UPDATE content = VALUES(content)
-                """
-                self.cursor.execute(query, (index_val, content_val))
-            self.connection.commit()
-
-    def get_all_data(self):
-        # Protect database read operations with lock
-        with _db_lock:
-            select_query = "SELECT index_col, content FROM clerps"
-            self.cursor.execute(select_query)
-            rows = self.cursor.fetchall()
-            return json.dumps([[row[0], row[1]] for row in rows])
-
-    def close(self):
-        if self.connection.is_connected():
-            try:
-                self.cursor.close()
-            except:
-                pass
-            self.connection.close()
-
-    def __del__(self):
-        self.close()
-
-
-def get_global_db_manager():
-    """Get the global database manager instance"""
-    global _global_db_manager
-    if _global_db_manager is None:
-        with _db_lock:
-            # Double-checked locking pattern
-            if _global_db_manager is None:
-                _global_db_manager = DatabaseManager(
-                    host='8.135.11.160',
-                    database='vlm_tracing',
-                    user='vlm_tracing',
-                    password='tnAnBcpi8aG3XHTL'
-                )
-    return _global_db_manager
-
 
 class ListHandler(logging.Handler):
     """Handler that appends log records to a list."""
@@ -118,8 +35,6 @@ class ReusableTCPServer(socketserver.TCPServer):
 class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, frontend_dir, data_dir, **kwargs):
         self.data_dir = data_dir
-        # Use the global database manager instead of creating a new instance
-        self.db_manager = get_global_db_manager()
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
 
     def end_headers(self):
@@ -170,11 +85,6 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             with open(local_path, "rb") as f:
                 content = f.read()
-
-            if not self.path.startswith("/data/") and "metadata" not in self.path:
-                content_j = json.loads(content)
-                content_j["qParams"]["clerps"] = self.db_manager.get_all_data()
-                content = json.dumps(content_j, indent=2).encode('utf-8')
 
             # Compress large responses
             if len(content) > 1024**2:  # 1MB threshold
@@ -239,8 +149,6 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
             # Generate filename with timestamp
             save_path = os.path.join(self.data_dir, f"{slug}.json")
 
-            self.db_manager.upsert_data(data["qParams"]["clerps"])
-
             # Read the existing file and update it
             with open(save_path) as f:
                 graph = json.load(f)
@@ -304,14 +212,6 @@ class Server:
             self.httpd.server_close()
         except Exception as e:
             logger.debug(f"Error during server_close: {e}")
-
-        # Close the global database connection
-        global _global_db_manager
-        if _global_db_manager is not None:
-            try:
-                _global_db_manager.close()
-            except Exception as e:
-                logger.debug(f"Error closing database connection: {e}")
 
         logger.info("Server stopped")
 

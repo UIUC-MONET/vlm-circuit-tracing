@@ -1,11 +1,16 @@
-# attribution-graphs-frontend
+# Attribution Graph Frontend Assets
 
-Snapshot of the frontend code in [On the Biology of a Large Language Model](https://transformer-circuits.pub/2025/attribution-graphs/biology.html) and [Circuit Tracing: Revealing Computational Graphs in Language Models](https://transformer-circuits.pub/2025/attribution-graphs/methods.html).
+This directory contains the browser frontend assets used by `circuit-tracer start-server`.
 
-To run:
+The frontend is a bundled snapshot of the attribution graph UI associated with:
 
+- [On the Biology of a Large Language Model](https://transformer-circuits.pub/2025/attribution-graphs/biology.html)
+- [Circuit Tracing: Revealing Computational Graphs in Language Models](https://transformer-circuits.pub/2025/attribution-graphs/methods.html)
+
+For this VLM package, do not run these assets directly with a separate JavaScript dev server. Use the Python server instead:
+
+```bash
+circuit-tracer start-server --graph_file_dir ./your_graph --port 8041
 ```
-git clone git@github.com:anthropics/attribution-graphs-frontend.git
-cd attribution-graphs-frontend
-npx hot-server
-```
+
+The server provides graph JSON files, local annotation persistence, and image-token attention maps from the selected graph directory.

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transformer-lens"
+version = "2.16.0+vlm.0"
+description = "Vendored TransformerLens fork with HookedVLTransformer support"
+requires-python = ">=3.10"
+dependencies = [
+    "accelerate",
+    "beartype",
+    "datasets",
+    "einops",
+    "fancy-einsum",
+    "jaxtyping",
+    "numpy",
+    "pandas",
+    "rich",
+    "safetensors",
+    "sentencepiece",
+    "torch",
+    "tqdm",
+    "transformers",
+]
+
+[tool.setuptools.packages.find]
+include = ["transformer_lens*"]
