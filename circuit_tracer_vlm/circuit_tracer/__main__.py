@@ -33,6 +33,7 @@ def main():
         "-i",
         "--image",
         type=str,
+        required=True,
         help=("Image path"),
     )
 
@@ -135,6 +136,11 @@ def main():
         help="Start a local server to visualize graphs after processing.",
     )
     attr_parser.add_argument("--port", type=int, default=8041, help="Port for the local server.")
+    attr_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host interface for the local server.",
+    )
 
     # Start-server subcommand
     server_parser = subparsers.add_parser(
@@ -147,6 +153,11 @@ def main():
         help="Path to the directory containing graph JSON files.",
     )
     server_parser.add_argument("--port", type=int, default=8041, help="Port for the local server.")
+    server_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host interface for the local server.",
+    )
 
     # Attention maps subcommand
     attention_parser = subparsers.add_parser(
@@ -200,12 +211,60 @@ def main():
     attention_parser.add_argument("--opacity", type=float, default=0.8)
     attention_parser.add_argument("--overwrite", action="store_true")
 
+    # PLT training subcommand
+    train_parser = subparsers.add_parser(
+        "train-plt",
+        help="Train per-layer transcoders and export them in circuit-tracer format.",
+    )
+    train_parser.add_argument("-m", "--model", default="google/gemma-3-4b-it")
+    train_parser.add_argument("dataset", help="Hugging Face dataset name or local dataset path.")
+    train_parser.add_argument("--split", default="train")
+    train_parser.add_argument("--save_dir", default="checkpoints/plt")
+    train_parser.add_argument("--layers", nargs="*", type=int)
+    train_parser.add_argument("--layer_stride", type=int, default=1)
+    train_parser.add_argument("--batch_size", type=int, default=1)
+    train_parser.add_argument("--grad_acc_steps", type=int, default=1)
+    train_parser.add_argument("--max_steps", type=int, default=1000)
+    train_parser.add_argument("--save_every", type=int, default=1000)
+    train_parser.add_argument("--lr", type=float, default=5e-4)
+    train_parser.add_argument("--expansion_factor", type=int, default=32)
+    train_parser.add_argument("--num_features", type=int)
+    train_parser.add_argument("--top_k", type=int, default=48)
+    train_parser.add_argument("--skip_connection", action="store_true")
+    train_parser.add_argument("--max_length", type=int, default=1024)
+    train_parser.add_argument("--text_column", default="text")
+    train_parser.add_argument("--image_column", default="image")
+    train_parser.add_argument(
+        "--no_image",
+        action="store_true",
+        help="Train on text-only batches even if the dataset has an image column.",
+    )
+    train_parser.add_argument(
+        "--prompt_template",
+        default=(
+            "<start_of_turn>user\n<start_of_image>{text}<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        ),
+    )
+    train_parser.add_argument(
+        "--dtype",
+        choices=["float32", "bfloat16", "float16", "fp32", "bf16", "fp16"],
+        default="bfloat16",
+    )
+    train_parser.add_argument("--device")
+    train_parser.add_argument("--revision")
+    train_parser.add_argument("--hf_token")
+    train_parser.add_argument("--num_workers", type=int, default=0)
+    train_parser.add_argument("--log_every", type=int, default=10)
+
     args = parser.parse_args()
 
     if args.command == "attribute":
         run_attribution(args, attr_parser)
     if args.command == "attention-maps":
         run_attention_maps(args, attention_parser)
+    if args.command == "train-plt":
+        run_train_plt(args)
     if args.command == "start-server" or getattr(args, "server", False):
         run_server(args)
 
@@ -372,12 +431,51 @@ def run_attention_maps(args, parser):
     logging.info(f"Wrote {len(written)} attention maps to: {os.path.abspath(output_dir)}")
 
 
+def run_train_plt(args):
+    from circuit_tracer.training import PLTConfig, train_plt_from_hf
+
+    dtype_mapping = {
+        "fp32": "float32",
+        "bf16": "bfloat16",
+        "fp16": "float16",
+    }
+    dtype = dtype_mapping.get(args.dtype, args.dtype)
+    cfg = PLTConfig(
+        model_name=args.model,
+        dataset=args.dataset,
+        split=args.split,
+        save_dir=args.save_dir,
+        layers=args.layers,
+        layer_stride=args.layer_stride,
+        batch_size=args.batch_size,
+        grad_acc_steps=args.grad_acc_steps,
+        max_steps=args.max_steps,
+        save_every=args.save_every,
+        lr=args.lr,
+        expansion_factor=args.expansion_factor,
+        num_features=args.num_features,
+        top_k=args.top_k,
+        skip_connection=args.skip_connection,
+        max_length=args.max_length,
+        text_column=args.text_column,
+        image_column=None if args.no_image else args.image_column,
+        prompt_template=args.prompt_template,
+        dtype=dtype,
+        device=args.device,
+        revision=args.revision,
+        hf_token=args.hf_token,
+        num_workers=args.num_workers,
+        log_every=args.log_every,
+    )
+    train_plt_from_hf(cfg)
+
+
 def run_server(args):
     from circuit_tracer.frontend.local_server import serve
 
     logging.info(f"Starting server on port {args.port}...")
     logging.info(f"Serving data from: {os.path.abspath(args.graph_file_dir)}")
-    server = serve(data_dir=args.graph_file_dir, port=args.port)
+    server = serve(data_dir=args.graph_file_dir, port=args.port, host=args.host)
     try:
         logging.info("Press Ctrl+C to stop the server.")
         while True:

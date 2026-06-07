@@ -33,8 +33,6 @@ from circuit_tracer.utils import get_default_device
 from circuit_tracer.utils.disk_offload import offload_modules
 
 from PIL import Image
-import requests
-from io import BytesIO
 
 
 @torch.no_grad()
@@ -104,7 +102,7 @@ def attribute(
     offload: Literal["cpu", "disk", None] = None,
     verbose: bool = False,
     update_interval: int = 4,
-    image_path = ""
+    image_path: str | None = None,
 ) -> Graph:
     """Compute an attribution graph for *prompt*.
 
@@ -120,6 +118,8 @@ def attribute(
                  or None (no offloading).
         verbose: Whether to show progress information.
         update_interval: Number of batches to process before updating the feature ranking.
+        image_path: Optional image path for VLM attribution. The CLI requires this
+            argument because the public workflow is image plus text.
 
     Returns:
         Graph: Fully dense adjacency (unpruned).
@@ -151,7 +151,7 @@ def attribute(
             offload_handles=offload_handles,
             update_interval=update_interval,
             logger=logger,
-            image_path=image_path
+            image_path=image_path,
         )
     finally:
         for reload_handle in offload_handles:
@@ -173,24 +173,26 @@ def _run_attribution(
     offload_handles,
     logger,
     update_interval=4,
-    image_path=""
+    image_path: str | None = None,
 ):
     start_time = time.time()
     # Phase 0: precompute
     logger.info("Phase 0: Precomputing activations and vectors")
     phase_start = time.time()
-    #input_ids = model.ensure_tokenized(prompt)
+    if image_path:
+        if not isinstance(prompt, str):
+            raise ValueError("Image attribution requires a string prompt.")
+        image = Image.open(image_path).convert("RGB")
 
-    image = Image.open(image_path)
+        # Use the multimodal processor so token positions match the residual stream.
+        batch = model.processor(text=prompt, images=image, return_tensors="pt")
+        input_ids = batch["input_ids"].squeeze(0).to(model.cfg.device)
+        ctx = model.setup_attribution(input_ids, prompt=prompt, image=image)
+    else:
+        image = None
+        input_ids = model.ensure_tokenized(prompt)
+        ctx = model.setup_attribution(input_ids)
 
-    # Use *multimodal* processor to get input_ids so token positions match the residual stream
-    batch = model.processor(text=prompt, images=image, return_tensors="pt")
-    input_ids = batch["input_ids"].squeeze(0).to(model.cfg.device)
-
-    batch["image"] = image
-
-
-    ctx = model.setup_attribution(input_ids, prompt, image)
     activation_matrix = ctx.activation_matrix
 
     logger.info(f"Precomputation completed in {time.time() - phase_start:.2f}s")
@@ -203,15 +205,21 @@ def _run_attribution(
     # Phase 1: forward pass
     logger.info("Phase 1: Running forward pass")
     phase_start = time.time()
-    '''with ctx.install_hooks(model):
-        residual = model.forward([prompt] * batch_size, [[image]] * batch_size, stop_at_layer=model.cfg.n_layers)
-        ctx._resid_activations[-1] = model.ln_final(residual)'''
-
     with ctx.install_hooks(model):
-        b = {k: (v.repeat(batch_size, *([1] * (v.ndim - 1))) if isinstance(v, torch.Tensor) and v.ndim > 1 else v)
-            for k, v in ctx.batch.items()}
-        b["image"] = image
-        residual = model.run_with_hooks(stop_at_layer=model.cfg.n_layers, batch=b)
+        if image is not None:
+            b = {
+                k: (
+                    v.repeat(batch_size, *([1] * (v.ndim - 1)))
+                    if isinstance(v, torch.Tensor) and v.ndim > 1
+                    else v
+                )
+                for k, v in ctx.batch.items()
+            }
+            b["image"] = image
+            residual = model.run_with_hooks(stop_at_layer=model.cfg.n_layers, batch=b)
+        else:
+            tokens = input_ids.unsqueeze(0).repeat(batch_size, 1)
+            residual = model.forward(tokens, stop_at_layer=model.cfg.n_layers)
         ctx._resid_activations[-1] = model.ln_final(residual)
 
     logger.info(f"Forward pass completed in {time.time() - phase_start:.2f}s")
@@ -328,7 +336,7 @@ def _run_attribution(
     full_edge_matrix[-n_logits:] = edge_matrix[max_feature_nodes:]
 
     graph = Graph(
-        input_string=model.processor.decode(input_ids),
+        input_string=model.decode_tokens(input_ids),
         input_tokens=input_ids,
         logit_tokens=logit_idx,
         logit_probabilities=logit_p,

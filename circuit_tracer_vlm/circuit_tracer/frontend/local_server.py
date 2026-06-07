@@ -4,7 +4,7 @@ import gzip
 import http.server
 import json
 import logging
-import os
+from urllib.parse import unquote
 import socketserver
 import threading
 from importlib.resources import files
@@ -34,8 +34,17 @@ class ReusableTCPServer(socketserver.TCPServer):
 # Create handler for serving circuit graph data
 class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, frontend_dir, data_dir, **kwargs):
-        self.data_dir = data_dir
+        self.data_dir = Path(data_dir).resolve()
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
+
+    def _resolve_data_path(self, rel_path: str) -> Path | None:
+        rel_path = unquote(rel_path.split("?", 1)[0]).lstrip("/")
+        path = (self.data_dir / rel_path).resolve()
+        try:
+            path.relative_to(self.data_dir)
+        except ValueError:
+            return None
+        return path
 
     def end_headers(self):
         """Override to disable caching for certain files."""
@@ -70,14 +79,13 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
             else:  # /graph_data/
                 rel_path = self.path[len("/graph_data/") :].split("?")[0]
 
-            # Properly join paths to handle missing slashes
-            local_path = os.path.join(self.data_dir, rel_path)
+            local_path = self._resolve_data_path(rel_path)
 
             logger.info(
                 f"Rewritten path to {local_path}. "
                 f"(self.path: {self.path}; self.data_dir: {self.data_dir})"
             )
-            if not os.path.exists(local_path):
+            if local_path is None or not local_path.exists() or not local_path.is_file():
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -100,14 +108,13 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
             # Extract the file path from the URL
             rel_path = "attention_maps/" + self.path[len("/emb_image/") :].split("?")[0] + ".jpg"
 
-            # Properly join paths to handle missing slashes
-            local_path = os.path.join(self.data_dir, rel_path)
+            local_path = self._resolve_data_path(rel_path)
 
             logger.info(
                 f"Rewritten path to {local_path}. "
                 f"(self.path: {self.path}; self.data_dir: {self.data_dir})"
             )
-            if not os.path.exists(local_path):
+            if local_path is None or not local_path.exists() or not local_path.is_file():
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -147,7 +154,11 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
             data = json.loads(post_data.decode("utf-8"))
 
             # Generate filename with timestamp
-            save_path = os.path.join(self.data_dir, f"{slug}.json")
+            save_path = self._resolve_data_path(f"{slug}.json")
+            if save_path is None:
+                self.send_response(404)
+                self.end_headers()
+                return
 
             # Read the existing file and update it
             with open(save_path) as f:
@@ -226,13 +237,14 @@ class Server:
         return self.logs
 
 
-def serve(data_dir, frontend_dir=None, port=8032):
+def serve(data_dir, frontend_dir=None, port=8032, host="127.0.0.1"):
     """Start a local HTTP server in a separate thread.
 
     Args:
         data_dir: Directory for local graph data.
         frontend_dir: Directory containing frontend files. Defaults to DEFAULT_FRONTEND_DIR.
         port: Port to serve on. Defaults to 8032.
+        host: Host interface to bind. Defaults to localhost only.
 
     Returns:
         Server object with a stop() method to shut down the server.
@@ -242,7 +254,7 @@ def serve(data_dir, frontend_dir=None, port=8032):
     frontend_dir = Path(frontend_dir).resolve() if frontend_dir else DEFAULT_FRONTEND_DIR
 
     frontend_dir_path = Path(frontend_dir)  # type: ignore
-    if not frontend_dir_path.exists() and frontend_dir_path.is_dir():
+    if not frontend_dir_path.exists() or not frontend_dir_path.is_dir():
         raise ValueError(f"Got frontend dir {frontend_dir} but this is not a valid directory")
 
     logger.info(f"Serving files from: {frontend_dir}")
@@ -250,13 +262,13 @@ def serve(data_dir, frontend_dir=None, port=8032):
     # Create a partially applied handler class with configured directories
     handler = functools.partial(CircuitGraphHandler, frontend_dir=frontend_dir, data_dir=data_dir)
 
-    httpd = ReusableTCPServer(("", port), handler)
+    httpd = ReusableTCPServer((host, port), handler)
 
     # Start the server in a thread
     server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     server_thread.start()
 
-    logger.info(f"Serving at http://localhost:{port}")
+    logger.info(f"Serving at http://{host}:{port}")
     logger.info(f"Serving files from: {frontend_dir}")
     logger.info(f"Serving data from: {data_dir}")
 

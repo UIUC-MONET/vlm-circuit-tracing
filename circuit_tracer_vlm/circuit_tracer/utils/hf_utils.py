@@ -42,13 +42,31 @@ def load_transcoder_from_hub(
     lazy_encoder: bool = False,
     lazy_decoder: bool = True,
 ):
-    """Load a transcoder from a HuggingFace URI."""
+    """Load a transcoder from a HuggingFace URI, repo id, or local config directory."""
 
     # resolve legacy references
     if hf_ref == "gemma":
         hf_ref = "mntss/gemma-scope-transcoders"
     elif hf_ref == "llama":
         hf_ref = "mntss/transcoder-Llama-3.2-1B"
+
+    if os.path.exists(hf_ref):
+        local_path = hf_ref
+        config_path = (
+            local_path
+            if os.path.isfile(local_path)
+            else os.path.join(local_path, "config.yaml")
+        )
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Could not find config.yaml in {hf_ref}")
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        root = os.path.dirname(config_path)
+        config["repo_id"] = root
+        config["revision"] = None
+        config["scan"] = config.get("scan") or root
+        config["local_path"] = root
+        return load_transcoders(config, device, dtype, lazy_encoder, lazy_decoder), config
 
     hf_uri = HfUri.from_str(hf_ref)
     try:
@@ -83,6 +101,7 @@ def load_transcoders(
     if model_kind == "transcoder_set":
         from circuit_tracer.transcoder.single_layer_transcoder import load_transcoder_set
 
+        _validate_transcoder_set_layers(config)
         transcoder_paths = resolve_transcoder_paths(config)
         is_gemma_scope = "gemma-scope" in config.get("repo_id", "")
 
@@ -96,15 +115,18 @@ def load_transcoders(
             device=device,
             lazy_encoder=lazy_encoder,
             lazy_decoder=lazy_decoder,
+            top_k=config.get("top_k", 48),
         )
     elif model_kind == "cross_layer_transcoder":
         from circuit_tracer.transcoder.cross_layer_transcoder import load_clt
 
-        local_path = snapshot_download(
-            config["repo_id"],
-            revision=config.get("revision", "main"),
-            allow_patterns=["*.safetensors"],
-        )
+        local_path = config.get("local_path")
+        if local_path is None:
+            local_path = snapshot_download(
+                config["repo_id"],
+                revision=config.get("revision", "main"),
+                allow_patterns=["*.safetensors"],
+            )
 
         return load_clt(
             local_path,
@@ -124,8 +146,16 @@ def resolve_transcoder_paths(config: dict) -> dict:
     if "transcoders" in config:
         hf_paths = [path for path in config["transcoders"] if path.startswith("hf://")]
         local_map = download_hf_uris(hf_paths)
+        local_root = config.get("local_path")
         transcoder_paths = {
-            i: local_map.get(path, path) for i, path in enumerate(config["transcoders"])
+            i: _resolve_local_transcoder_path(local_map.get(path, path), local_root)
+            for i, path in enumerate(config["transcoders"])
+        }
+    elif "local_path" in config:
+        local_path = config["local_path"]
+        layer_files = glob.glob(os.path.join(local_path, "layer_*.safetensors"))
+        transcoder_paths = {
+            i: os.path.join(local_path, f"layer_{i}.safetensors") for i in range(len(layer_files))
         }
     else:
         local_path = snapshot_download(
@@ -138,6 +168,31 @@ def resolve_transcoder_paths(config: dict) -> dict:
             i: os.path.join(local_path, f"layer_{i}.safetensors") for i in range(len(layer_files))
         }
     return transcoder_paths
+
+
+def _validate_transcoder_set_layers(config: dict) -> None:
+    layers = config.get("layers")
+    if layers is None:
+        return
+
+    layers = list(layers)
+    expected_layers = config.get("num_model_layers")
+    if layers != list(range(len(layers))):
+        raise ValueError(
+            "This transcoder set was trained for non-contiguous layers. "
+            "Train all layers from 0 upward before using it for attribution."
+        )
+    if expected_layers is not None and len(layers) != int(expected_layers):
+        raise ValueError(
+            f"This transcoder set contains {len(layers)} of {expected_layers} model layers. "
+            "Train all layers before using it for attribution."
+        )
+
+
+def _resolve_local_transcoder_path(path: str, local_root: str | None) -> str:
+    if path.startswith("hf://") or os.path.isabs(path) or local_root is None:
+        return path
+    return os.path.join(local_root, path)
 
 
 def parse_hf_uri(uri: str) -> HfUri:

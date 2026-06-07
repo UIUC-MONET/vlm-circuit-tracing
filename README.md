@@ -8,7 +8,7 @@ We are in the process of uploading implementations and results. All code and mod
 
 Todo:
 - ~~Scripts for computing attribution graphs~~
-- Scripts for training per-layer transcoders
+- ~~Scripts for training per-layer transcoders~~
 - ~~Transcoder weights for Gemma3-4B-IT~~
 - ~~Scripts for visualizing circuits~~
 - ~~Scripts for computing attention graphs~~
@@ -21,8 +21,7 @@ This release supports VLM circuit tracing for Gemma3-4B-IT with released transco
 - convert attribution graphs into frontend JSON,
 - serve and annotate circuits in a local browser UI,
 - generate image-token attention maps for the circuit viewer.
-
-Training per-layer transcoders is not included in this release yet.
+- train and export per-layer transcoders in the same format consumed by attribution.
 
 ## Installation
 
@@ -38,6 +37,12 @@ pip install -e circuit_tracer_vlm
 ```
 
 The bundled TransformerLens fork is required because VLM tracing uses `HookedVLTransformer`, which is not available in upstream `transformer-lens`.
+
+Install training extras if you want to train PLTs:
+
+```bash
+pip install -e "circuit_tracer_vlm[train]"
+```
 
 ## Transcoder Weights
 
@@ -106,6 +111,23 @@ circuit-tracer attention-maps \
 ```
 
 This writes numbered images to `./your_graph/attention_maps/`. The frontend serves them through `/emb_image/<index>` when inspecting image-token nodes. Use `--method similarity` to render raw hidden-state cosine-similarity maps instead of attention rollout.
+
+## Training Per-Layer Transcoders
+
+To train PLTs on a Hugging Face or local `datasets` dataset:
+
+```bash
+circuit-tracer train-plt /path/to/or/hf-dataset \
+  --model google/gemma-3-4b-it \
+  --batch_size 1 \
+  --max_steps 10000 \
+  --save_dir ./gemma3-plt
+```
+
+For image datasets, the default columns are `image` and `text`. The command writes
+`layer_*.safetensors` plus `config.yaml`; that directory can be passed to the loader
+or uploaded to Hugging Face with the same file layout as the released Gemma3 PLTs.
+Use `--layers` only for quick debug runs; attribution requires a PLT for every model layer.
 
 ## Issues
 

@@ -45,6 +45,7 @@ class SingleLayerTranscoder(nn.Module):
         lazy_decoder: bool = False,
         device: torch.device | None = None,
         dtype: torch.dtype = torch.bfloat16,
+        top_k: int | None = 48,
     ):
         super().__init__()
 
@@ -57,6 +58,7 @@ class SingleLayerTranscoder(nn.Module):
         self.transcoder_path = transcoder_path
         self.lazy_encoder = lazy_encoder
         self.lazy_decoder = lazy_decoder
+        self.top_k = top_k
 
         if lazy_encoder or lazy_decoder:
             assert self.transcoder_path is not None, "Transcoder path must be set for lazy loading"
@@ -158,22 +160,19 @@ class SingleLayerTranscoder(nn.Module):
         pre_acts = F.linear(input_acts.to(W_enc.dtype), W_enc, self.b_enc)
         acts = self.activation_function(pre_acts)
 
-        # torch.save(acts, '/work/nvme/bfga/tianhux2/vlm-tracing/qwen.pt')
-        # print(self.activation_function)
-
         if zero_first_pos:
             acts[0] = 0
 
+        if self.top_k is not None:
+            n_pos = acts.shape[0]
+            k = min(self.top_k, acts.shape[-1])
+            topk_vals, topk_idxs = torch.topk(acts, k, dim=-1, sorted=False)
+            topk_acts = torch.zeros_like(acts)
+            row_indices = torch.arange(n_pos, device=acts.device).unsqueeze(1).expand(n_pos, k)
+            topk_acts[row_indices, topk_idxs] = topk_vals
+            acts = topk_acts
 
-
-        N, M = acts.shape
-        k = 48
-        topk_vals, topk_idxs = torch.topk(acts, k, dim=-1, sorted=False)
-        topk_acts = torch.zeros_like(acts)
-        row_indices = torch.arange(N, device=acts.device).unsqueeze(1).expand(N, k)
-        topk_acts[row_indices, topk_idxs] = topk_vals
-
-        sparse_acts = topk_acts.to_sparse()
+        sparse_acts = acts.to_sparse()
 
         _, feat_idx = sparse_acts.indices()
         active_encoders = W_enc[feat_idx]
@@ -451,6 +450,7 @@ def load_relu_transcoder(
     dtype: torch.dtype = torch.float32,
     lazy_encoder: bool = True,
     lazy_decoder: bool = True,
+    top_k: int | None = 48,
 ):
     if device is None:
         device = get_default_device()
@@ -479,6 +479,7 @@ def load_relu_transcoder(
             transcoder_path=path,
             lazy_encoder=lazy_encoder,
             lazy_decoder=lazy_decoder,
+            top_k=top_k,
         )
     transcoder.load_state_dict(param_dict, assign=True)
     return transcoder.to(dtype)
@@ -494,6 +495,7 @@ def load_transcoder_set(
     gemma_scope: bool = False,
     lazy_encoder: bool = True,
     lazy_decoder: bool = True,
+    top_k: int | None = 48,
 ) -> TranscoderSet:
     if device is None:
         device = get_default_device()
@@ -524,6 +526,7 @@ def load_transcoder_set(
             dtype=dtype,
             lazy_encoder=lazy_encoder,
             lazy_decoder=lazy_decoder,
+            top_k=top_k,
         )
     # we don't know how many layers the model has, but we need all layers from 0 to max covered
     assert set(transcoders.keys()) == set(range(max(transcoders.keys()) + 1)), (

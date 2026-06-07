@@ -7,9 +7,8 @@ The current public release targets Gemma3-4B-IT with the released Gemma3 transco
 - attribution graph computation for image plus text prompts,
 - graph pruning and JSON export for the browser viewer,
 - a local circuit visualization server,
-- image-token attention map generation for the viewer.
-
-Training per-layer transcoders is not included in this package yet.
+- image-token attention map generation for the viewer,
+- per-layer transcoder training and export.
 
 ## Installation
 
@@ -22,6 +21,12 @@ pip install -e circuit_tracer_vlm
 
 The first command installs the bundled TransformerLens fork as `transformer-lens==2.16.0+vlm.0`. This fork provides `HookedVLTransformer`, which the VLM circuit tracer needs and upstream TransformerLens does not provide.
 
+Install training extras when training PLTs:
+
+```bash
+pip install -e "circuit_tracer_vlm[train]"
+```
+
 ## Transcoder Weights
 
 The released Gemma3-4B-IT transcoders are available at:
@@ -29,6 +34,9 @@ The released Gemma3-4B-IT transcoders are available at:
 https://huggingface.co/tianhux2/gemma3-4b-it-plt
 
 Use this repository as the `--transcoder_set` argument in the CLI.
+
+Local transcoder directories are also supported when they contain `config.yaml`
+and `layer_*.safetensors`.
 
 ## End-To-End Workflow
 
@@ -106,6 +114,26 @@ circuit-tracer attention-maps \
 
 This saves `0.jpg` through `255.jpg` in `./your_graph/attention_maps`, matching Gemma-style 16x16 pooled image tokens. Use `--method similarity` for raw hidden-state similarity maps, or `--indices 0,5,17` to save only selected token maps.
 
+## Training PLTs
+
+Train per-layer transcoders from a Hugging Face dataset or a local `datasets`
+directory:
+
+```bash
+circuit-tracer train-plt /path/to/or/hf-dataset \
+  --model google/gemma-3-4b-it \
+  --batch_size 1 \
+  --max_steps 10000 \
+  --save_dir ./gemma3-plt
+```
+
+By default the trainer expects `image` and `text` columns and uses the package's
+Gemma3 image prompt template. Use `--no_image` for text-only datasets, or set
+`--image_column`, `--text_column`, and `--prompt_template` for custom schemas.
+The output directory can be used as `--transcoder_set ./gemma3-plt`.
+Use `--layers` only for quick debug runs; attribution requires a PLT for every
+model layer.
+
 ## CLI Reference
 
 Important `attribute` arguments:
@@ -127,6 +155,7 @@ Important visualization arguments:
 
 - `circuit-tracer start-server --graph_file_dir ./your_graph --port 8041`
 - `circuit-tracer attention-maps --image your_image.png --graph_file_dir ./your_graph`
+- `circuit-tracer train-plt /path/to/or/hf-dataset --model google/gemma-3-4b-it`
 
 ## Graph Interaction
 

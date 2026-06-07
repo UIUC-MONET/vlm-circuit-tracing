@@ -19,10 +19,6 @@ from circuit_tracer.transcoder.cross_layer_transcoder import CrossLayerTranscode
 from circuit_tracer.utils import get_default_device
 from circuit_tracer.utils.hf_utils import load_transcoder_from_hub
 
-from PIL import Image
-import requests
-from io import BytesIO
-
 # Type definition for an intervention tuple (layer, position, feature_idx, value)
 Intervention = tuple[
     int | torch.Tensor, int | slice | torch.Tensor, int | torch.Tensor, int | torch.Tensor
@@ -111,8 +107,10 @@ class ReplacementModel(HookedVLTransformer):
         Returns:
             ReplacementModel: The loaded ReplacementModel
         """
+        model_dtype = kwargs.get("dtype", torch.float32)
         inner_model = Gemma3ForConditionalGeneration.from_pretrained(
             model_name,
+            torch_dtype=model_dtype,
         )
         processor = AutoProcessor.from_pretrained(model_name)
         inner_model.vision_model = inner_model.vision_tower
@@ -326,17 +324,22 @@ class ReplacementModel(HookedVLTransformer):
             sparse=sparse,
             apply_activation_function=apply_activation_function,
         )
-        '''with torch.inference_mode(), self.hooks(activation_hooks):  # type: ignore
-            logits = self(inputs)'''
-
         with torch.inference_mode(), self.hooks(activation_hooks):
-            # If you use get_activations for VLM cases, pass image and call run_with_hooks instead.
-            raise RuntimeError("get_activations() is text-only; use setup_attribution for VLM.")
+            logits = self(inputs)
 
         activation_cache = torch.stack(activation_cache)
         if sparse:
             activation_cache = activation_cache.coalesce()
         return logits, activation_cache
+
+    def decode_tokens(self, tokens: torch.Tensor) -> str:
+        tokens = tokens.detach().cpu()
+        tokenizer = getattr(getattr(self, "processor", None), "tokenizer", None)
+        if tokenizer is not None:
+            return tokenizer.decode(tokens.tolist(), clean_up_tokenization_spaces=False)
+        if getattr(self, "tokenizer", None) is not None:
+            return self.tokenizer.decode(tokens.tolist(), clean_up_tokenization_spaces=False)
+        return str(tokens.tolist())
 
     @contextmanager
     def zero_softcap(self):
@@ -368,12 +371,14 @@ class ReplacementModel(HookedVLTransformer):
             ValueError: If tensor has wrong shape (must be 1-D or 2-D with batch size 1)
         """
 
-        if isinstance(prompt, str):
-            url = "https://tse2.mm.bing.net/th/id/OIP.Q5XP9BnAtU1I3d79cbHptgHaGu?rs=1&pid=ImgDetMain&o=7&rm=3"
-            response = requests.get(url)
-            image = Image.open(BytesIO(response.content))
+        tokenizer = getattr(getattr(self, "processor", None), "tokenizer", None)
+        if tokenizer is None:
+            tokenizer = getattr(self, "tokenizer", None)
 
-            tokens = self.processor(text=prompt, images=image, return_tensors="pt").input_ids.squeeze(0)
+        if isinstance(prompt, str):
+            if tokenizer is None:
+                raise ValueError("Cannot tokenize string input because no tokenizer is available.")
+            tokens = tokenizer(prompt, return_tensors="pt").input_ids.squeeze(0)
         elif isinstance(prompt, torch.Tensor):
             tokens = prompt.squeeze()
         elif isinstance(prompt, list):
@@ -385,18 +390,22 @@ class ReplacementModel(HookedVLTransformer):
             raise ValueError(f"Tensor must be 1-D, got shape {tokens.shape}")
 
         # Check if a special token is already present at the beginning
-        if tokens[0] in self.processor.tokenizer.all_special_ids:
+        special_ids = getattr(tokenizer, "all_special_ids", []) if tokenizer is not None else []
+        if len(tokens) and tokens[0] in special_ids:
             return tokens.to(self.cfg.device)
 
         # Prepend a special token to avoid artifacts at position 0
         candidate_bos_token_ids = [
-            self.processor.tokenizer.bos_token_id,
-            self.processor.tokenizer.pad_token_id,
-            self.processor.tokenizer.eos_token_id,
+            getattr(tokenizer, "bos_token_id", None),
+            getattr(tokenizer, "pad_token_id", None),
+            getattr(tokenizer, "eos_token_id", None),
         ]
-        candidate_bos_token_ids += self.processor.tokenizer.all_special_ids
+        candidate_bos_token_ids += special_ids
 
-        dummy_bos_token_id = next(filter(None, candidate_bos_token_ids))
+        dummy_bos_token_id = next(
+            (token_id for token_id in candidate_bos_token_ids if token_id is not None),
+            None,
+        )
         if dummy_bos_token_id is None:
             warnings.warn(
                 "No suitable special token found for BOS token replacement. "
@@ -407,85 +416,34 @@ class ReplacementModel(HookedVLTransformer):
 
         return tokens.to(self.cfg.device)
     
-    @torch.no_grad()
-    def assert_image_span_is_present_and_live(self, model, batch):
-        tok = model.processor.tokenizer
-        ids = batch["input_ids"][0]
-
-        # 1) Find image token ids (prefer cfg.image_token_id; fall back to vocab markers)
-        img_ids = []
-        if hasattr(model.cfg, "image_token_id") and model.cfg.image_token_id is not None:
-            img_ids.append(model.cfg.image_token_id)
-
-        vocab = tok.get_vocab()
-        for t in ("<start_of_image>", "<image_start>", "<image>", "<image_token>", "<image_soft_token>"):
-            if t in vocab:
-                img_ids.append(tok.convert_tokens_to_ids(t))
-
-        img_ids = list(dict.fromkeys(img_ids))  # dedupe
-
-        assert img_ids, "No image token id found (cfg.image_token_id and common markers missing)"
-
-        img_mask = torch.zeros_like(ids, dtype=torch.bool)
-        for mid in img_ids:
-            img_mask |= (ids == mid)
-
-        assert img_mask.any(), "No image markers in input_ids → image not wired into sequence"
-
-        # 2) Capture embed stream at hook_embed from the SAME forward
-        stream = {}
-        def _cap(x, hook):                # <-- accept named 'hook'
-            stream["x"] = x.detach()
-
-        model.hook_embed.add_hook(_cap, is_permanent=False)
-        _ = model.run_with_hooks(batch=batch, stop_at_layer=0)  # embed-only is enough
-        model.reset_hooks()
-
-        x = stream["x"][0]                # [T, d_model]
-        mean_norm_img = x[img_mask].norm(dim=-1).mean().item()
-        mean_norm_txt = x[~img_mask].norm(dim=-1).mean().item()
-
-        print(f"image token count: {int(img_mask.sum())}")
-        print(f"mean ||embed|| @ image positions: {mean_norm_img:.6f}")
-        print(f"mean ||embed|| @ non-image positions: {mean_norm_txt:.6f}")
-    
     def forward_from_batch(self, batch, *, stop_at_layer=None):
         """
         Forward pass from a processor batch that supports multimodal inputs,
         while preserving HookedVLTransformer hooks.
         """
-        # Decode text back from tokens
-        #texts = self.processor.tokenizer.batch_decode(batch["input_ids"])
+        if "pixel_values" in batch and "image" not in batch:
+            raise ValueError(
+                "Processor batches with pixel_values must include the raw image under "
+                "`image` so HookedVLTransformer can rebuild image embeddings."
+            )
+
         texts = self.processor.tokenizer.batch_decode(
             batch["input_ids"],
-            skip_special_tokens=True,   # remove <start_of_image>/<end_of_image>
+            skip_special_tokens=True,
         )
 
-        '''url = "https://tse2.mm.bing.net/th/id/OIP.Q5XP9BnAtU1I3d79cbHptgHaGu?rs=1&pid=ImgDetMain&o=7&rm=3"
-        response = requests.get(url)
-        raw_image = Image.open(BytesIO(response.content)).convert("RGB")'''
-
-        print(batch.keys())
-
-        if 'image' in batch:
-            raw_image = batch['image']
-        # If pixel_values are present (multimodal batch)
-        #if "pixel_values" in batch:
-            # The forward method takes `images`, not `pixel_values=`
-            # These tensors are already normalized correctly by the processor.
-            #images = [batch["pixel_values"]] if batch["pixel_values"].ndim == 4 else batch["pixel_values"]
+        if "image" in batch:
+            raw_image = batch["image"]
             n_texts = len(texts)
             images = [[raw_image] for _ in range(n_texts)]
 
-            # Call the regular HookedVLTransformer.forward
-            # DO NOT pass pixel_values= or media_locations=; it will error.
             return super().forward(
                 batch["input_ids"],
                 images=images,
                 attention_mask=batch.get("attention_mask", None),
                 stop_at_layer=stop_at_layer,
             )
-        
+
         # Text-only fallback
         return super().forward(
             texts,
@@ -494,7 +452,7 @@ class ReplacementModel(HookedVLTransformer):
         )
 
     @torch.no_grad()
-    def setup_attribution(self, inputs: str | torch.Tensor, prompt, image=None):
+    def setup_attribution(self, inputs: str | torch.Tensor, prompt=None, image=None):
         """Precomputes the transcoder activations and error vectors, saving them and the
         token embeddings.
 
@@ -503,19 +461,17 @@ class ReplacementModel(HookedVLTransformer):
                 batching) for now
         """
 
-        '''url = "https://tse2.mm.bing.net/th/id/OIP.Q5XP9BnAtU1I3d79cbHptgHaGu?rs=1&pid=ImgDetMain&o=7&rm=3"
-        response = requests.get(url)
-        raw_image = Image.open(BytesIO(response.content)).convert("RGB")'''
-
         raw_image = image
+        is_multimodal = raw_image is not None
 
-        batch = self.processor(text=prompt, images=raw_image, return_tensors="pt").to(self.cfg.device)
-
-        if isinstance(inputs, str):
-            # When caller gives a string, ignore ensure_tokenized and use the real multimodal batch
+        if is_multimodal:
+            if not isinstance(prompt, str):
+                raise ValueError("Multimodal attribution requires a string prompt.")
+            batch = self.processor(text=prompt, images=raw_image, return_tensors="pt")
             tokens = batch["input_ids"].squeeze(0).to(self.cfg.device)
         else:
-            tokens = inputs.squeeze()
+            tokens = self.ensure_tokenized(inputs) if isinstance(inputs, str) else inputs.squeeze()
+            batch = {"input_ids": tokens.unsqueeze(0)}
 
         assert isinstance(tokens, torch.Tensor), "Tokens must be a tensor"
         assert tokens.ndim == 1, "Tokens must be a 1D tensor"
@@ -527,31 +483,21 @@ class ReplacementModel(HookedVLTransformer):
         mlp_out_cache, mlp_out_caching_hooks, _ = self.get_caching_hooks(
             lambda name: self.feature_output_hook in name
         )
-        print(inputs)
-        print(tokens)
+        batch = self._to_device_batch(batch)
+        if is_multimodal:
+            batch["image"] = raw_image
 
-        #self.assert_image_span_is_present_and_live(self, batch)
-        batch = {k: v.to(self.cfg.device) for k, v in batch.items()}
-        batch["image"] = raw_image
-        
-        '''logits = self.run_with_hooks(
-            prompt, image, fwd_hooks=mlp_in_caching_hooks + mlp_out_caching_hooks, batch=batch
-        )'''
-
-        logits = self.run_with_hooks(
-            [prompt], [[raw_image]], fwd_hooks=mlp_in_caching_hooks + mlp_out_caching_hooks
-        )
-        
-        #_ = self.run_with_hooks([prompt], [[raw_image]], stop_at_layer=None)
-        print("mlp_in_cache")
-        # print(len(mlp_in_cache), mlp_in_cache.keys(), mlp_in_cache["blocks.0.mlp.hook_in"])
+        if is_multimodal:
+            logits = self.run_with_hooks(
+                [prompt], [[raw_image]], fwd_hooks=mlp_in_caching_hooks + mlp_out_caching_hooks
+            )
+        else:
+            logits = self.run_with_hooks(
+                tokens.unsqueeze(0), fwd_hooks=mlp_in_caching_hooks + mlp_out_caching_hooks
+            )
 
         mlp_in_cache = torch.cat(list(mlp_in_cache.values()), dim=0)
         mlp_out_cache = torch.cat(list(mlp_out_cache.values()), dim=0)
-
-        print(mlp_in_cache.shape, mlp_in_cache.dtype)
-
-
 
         attribution_data = self.transcoders.compute_attribution_components(mlp_in_cache)
 
@@ -577,14 +523,18 @@ class ReplacementModel(HookedVLTransformer):
         self.blocks[0].hook_resid_pre.add_hook(_cap_post_image, is_permanent=False)
 
         # IMPORTANT: same forward used for caches/logits
-        _ = self.run_with_hooks([prompt], [[raw_image]])
+        if is_multimodal:
+            _ = self.run_with_hooks([prompt], [[raw_image]])
+        else:
+            _ = self.run_with_hooks(tokens.unsqueeze(0))
 
         self.reset_hooks()
         token_vectors = stream_in["x"].squeeze(0)   # [T, d_model]
         # --- end drop-in ---
 
-        batch = self.processor(text=prompt, images=raw_image, return_tensors="pt")
-        batch = {k: v.to(self.cfg.device) for k, v in batch.items()}
+        if is_multimodal:
+            batch = self.processor(text=prompt, images=raw_image, return_tensors="pt")
+            batch = {k: v.to(self.cfg.device) for k, v in batch.items()}
 
         ctx = AttributionContext(
             activation_matrix=attribution_data["activation_matrix"],
@@ -598,35 +548,6 @@ class ReplacementModel(HookedVLTransformer):
         )
 
         ctx.batch = batch
-
-        # --- Sanity: verify text attends to image positions ---
-        # --- Sanity: verify text can attend to image positions ---
-        with torch.no_grad():
-            tok = self.processor.tokenizer
-
-            # pick whichever image marker exists in this tokenizer
-            vocab = tok.get_vocab()
-            img_token = None
-            for candidate in ("<image_start>", "<image>", "<image_token>"):
-                if candidate in vocab:
-                    img_token = candidate
-                    break
-            if img_token is None:
-                print("[attn sanity] no image special token in vocab")
-            else:
-                img_id = tok.convert_tokens_to_ids(img_token)
-                ids = batch["input_ids"][0]
-                img_pos = (ids == img_id).nonzero(as_tuple=True)[0]
-                if len(img_pos) == 0:
-                    print("[attn sanity] no image markers in this sequence")
-                else:
-                    # last text position
-                    txt_last = (ids != img_id).nonzero(as_tuple=True)[0][-1].item()
-                    for name, pat in ctx.attn_patterns.items():  # pat: [B,H,Q,K]
-                        mass = pat[0].mean(0)[txt_last, img_pos].sum().item()
-                        print(f"[attn sanity] {name}: text→image mass = {mass:.4f}")
-
-
         return ctx
     
     def _to_device_batch(self, batch: dict) -> dict:
@@ -644,13 +565,7 @@ class ReplacementModel(HookedVLTransformer):
         """
         # Processor batch (VLM-safe)
         if isinstance(inputs, dict) and "input_ids" in inputs:
-            b = self._to_device_batch(inputs) if hasattr(self, "_to_device_batch") else self._to_device_batch(inputs)
-            return self.run_with_hooks(
-                fwd_hooks=fwd_hooks,
-                input_ids=b["input_ids"],
-                pixel_values=b.get("pixel_values", None),
-                media_locations=b.get("media_locations", None),
-            )
+            return self.run_with_hooks(batch=self._to_device_batch(inputs), fwd_hooks=fwd_hooks)
 
         # (prompt, image) tuple (VLM)
         if isinstance(inputs, tuple) and len(inputs) == 2:
@@ -677,8 +592,6 @@ class ReplacementModel(HookedVLTransformer):
         Returns:
             list[tuple[str, Callable]]: The freeze hooks needed to run the desired intervention.
         """
-
-        print("88888")
 
         hookpoints_to_freeze = ["hook_pattern"]
         if constrained_layers:
@@ -1125,14 +1038,18 @@ class ReplacementModel(HookedVLTransformer):
             2. A HuggingFace processor batch providing pixel_values/media_locations
         """
         # Case 1: user passed a processor batch (from AutoProcessor)
-        if len(args) == 0 and pixel_values is not None:
-            return super().forward(
-                kwargs["input_ids"],
-                attention_mask=attention_mask,
-                pixel_values=pixel_values,
-                media_locations=media_locations,
-                stop_at_layer=stop_at_layer,
-            )
+        if len(args) == 0 and "input_ids" in kwargs:
+            batch = {
+                "input_ids": kwargs["input_ids"],
+                "attention_mask": attention_mask,
+            }
+            if pixel_values is not None:
+                batch["pixel_values"] = pixel_values
+            if media_locations is not None:
+                batch["media_locations"] = media_locations
+            if "image" in kwargs:
+                batch["image"] = kwargs["image"]
+            return self.forward_from_batch(batch, stop_at_layer=stop_at_layer)
 
         # Case 2: the usual HookedVLTransformer convention: [prompts], [[images]]
         if len(args) == 2 and isinstance(args[1], list):
