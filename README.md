@@ -11,7 +11,7 @@ Todo:
 - Scripts for training per-layer transcoders
 - ~~Transcoder weights for Gemma3-4B-IT~~
 - Scripts for visualizing circuits
-- Scripts for computing attention graphs
+- ~~Scripts for computing attention graphs~~
 
 ---
 
@@ -58,6 +58,24 @@ circuit-tracer attribute \
 ```
 
 We ran this script with a single H100 GPU, you may need to adjust the code and your configs for memory reduction. It will create a folder, specified in graph_file_dir, that will contain all the information you need to find circuits on this graph.
+
+
+### Attention Maps
+
+The local graph frontend can display one image-token map for each visual token. To generate these maps for an existing graph directory, run:
+
+```
+circuit-tracer attention-maps \
+  --image your_image.png \
+  --graph_file_dir ./your_graph \
+  --model google/gemma-3-4b-pt \
+  --method rollout \
+  --render overlay \
+  --dtype bfloat16 \
+  --overwrite
+```
+
+This writes numbered images to `./your_graph/attention_maps/`. The frontend serves them through the existing `/emb_image/<index>` route when inspecting image-token nodes. Use `--method similarity` to render raw hidden-state cosine-similarity maps instead of attention rollout.
 
 
 ### Issues

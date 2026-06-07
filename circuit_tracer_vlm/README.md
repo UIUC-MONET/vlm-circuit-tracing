@@ -75,6 +75,24 @@ You must set `--slug` and `--graph_file_dir`, or `--graph_output_path`, or both!
 **Local Server**
 - `--server`: Start a local web server for graph visualization
 
+
+### Attention Maps
+
+For VLM graph directories, the CLI can generate image-token attention maps that the local frontend serves from `<graph_file_dir>/attention_maps`:
+
+```
+circuit-tracer attention-maps \
+  --image your_image.png \
+  --graph_file_dir ./graph_files \
+  --model google/gemma-3-4b-pt \
+  --method rollout \
+  --render overlay \
+  --dtype bfloat16 \
+  --overwrite
+```
+
+By default this saves `0.jpg` through `255.jpg`, matching Gemma-style 16x16 pooled image tokens. `--method similarity` saves raw hidden-state similarity maps; `--indices 0,5,17` saves only selected token maps.
+
 ### Optional Arguments
 
 **Attribution Parameters:**

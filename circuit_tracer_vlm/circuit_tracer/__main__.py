@@ -166,11 +166,65 @@ def main():
     )
     server_parser.add_argument("--port", type=int, default=8041, help="Port for the local server.")
 
+    # Attention maps subcommand
+    attention_parser = subparsers.add_parser(
+        "attention-maps",
+        help="Compute image-token attention maps for the local graph viewer.",
+    )
+    attention_parser.add_argument("-i", "--image", required=True, help="Input image path.")
+    attention_parser.add_argument(
+        "-m",
+        "--model",
+        default="google/gemma-3-4b-pt",
+        help="VLM model containing a SigLIP vision tower.",
+    )
+    attention_parser.add_argument(
+        "--graph_file_dir",
+        help="Graph directory. Maps are written to <graph_file_dir>/attention_maps.",
+    )
+    attention_parser.add_argument(
+        "-o",
+        "--output_dir",
+        help="Direct output directory for numbered attention-map images.",
+    )
+    attention_parser.add_argument(
+        "--method",
+        choices=["rollout", "similarity"],
+        default="rollout",
+        help="Map computation method.",
+    )
+    attention_parser.add_argument(
+        "--render",
+        choices=["overlay", "grayscale"],
+        default="overlay",
+        help="How to render saved maps.",
+    )
+    attention_parser.add_argument(
+        "--indices",
+        help="Comma-separated image-token indices to save. Defaults to all pooled image tokens.",
+    )
+    attention_parser.add_argument("--device", help="Torch device, e.g. cuda, cuda:0, or cpu.")
+    attention_parser.add_argument(
+        "--dtype",
+        choices=["auto", "float32", "bfloat16", "float16", "fp32", "bf16", "fp16"],
+        default="auto",
+        help="Datatype for model loading.",
+    )
+    attention_parser.add_argument("--last-k-layers", type=int, default=4)
+    attention_parser.add_argument("--head-keep-frac", type=float, default=0.30)
+    attention_parser.add_argument("--block", type=int, default=4)
+    attention_parser.add_argument("--pool-reduce", choices=["max", "mean"], default="max")
+    attention_parser.add_argument("--clip-top-pct", type=float, default=5.0)
+    attention_parser.add_argument("--opacity", type=float, default=0.8)
+    attention_parser.add_argument("--overwrite", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "attribute":
         run_attribution(args, attr_parser)
-    if args.command == "start-server" or args.server:
+    if args.command == "attention-maps":
+        run_attention_maps(args, attention_parser)
+    if args.command == "start-server" or getattr(args, "server", False):
         run_server(args)
 
 
@@ -261,7 +315,7 @@ def run_attribution(args, parser):
         verbose=args.verbose,
         offload=args.offload,
         max_feature_nodes=args.max_feature_nodes,
-        image_path=args.image
+        image_path=args.image,
     )
 
 
@@ -282,6 +336,58 @@ def run_attribution(args, parser):
             edge_threshold=args.edge_threshold,
         )
         logging.info(f"Graph JSON files written to {args.graph_file_dir}")
+
+
+def run_attention_maps(args, parser):
+    if bool(args.graph_file_dir) == bool(args.output_dir):
+        parser.error("Provide exactly one of --graph_file_dir or --output_dir")
+
+    output_dir = (
+        os.path.join(args.graph_file_dir, "attention_maps")
+        if args.graph_file_dir
+        else args.output_dir
+    )
+
+    import torch
+
+    dtype_mapping = {
+        "auto": None,
+        "fp32": torch.float32,
+        "float32": torch.float32,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+    }
+    dtype = dtype_mapping[args.dtype]
+
+    indices = None
+    if args.indices:
+        indices = [int(part.strip()) for part in args.indices.split(",") if part.strip()]
+
+    from circuit_tracer.attention import SiglipAttentionMapper
+
+    mapper = SiglipAttentionMapper(
+        model_id=args.model,
+        device=args.device,
+        dtype=dtype,
+        last_k_layers=args.last_k_layers,
+        head_keep_frac=args.head_keep_frac,
+        block=args.block,
+        pool_reduce=args.pool_reduce,
+        clip_top_pct=args.clip_top_pct,
+        cache_maps=False,
+    )
+    written = mapper.save_maps(
+        image=args.image,
+        output_dir=output_dir,
+        method=args.method,
+        render=args.render,
+        indices=indices,
+        opacity=args.opacity,
+        overwrite=args.overwrite,
+    )
+    logging.info(f"Wrote {len(written)} attention maps to: {os.path.abspath(output_dir)}")
 
 
 def run_server(args):
