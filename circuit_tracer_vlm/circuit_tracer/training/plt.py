@@ -16,6 +16,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModel, AutoProcessor, PreTrainedModel
 
+from circuit_tracer.training.data import (
+    DatasetSourceConfig,
+    WeightedBatchIterator,
+    load_and_prepare_datasets,
+    load_dataset_config,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,6 +32,8 @@ class PLTConfig:
 
     model_name: str = "google/gemma-3-4b-it"
     dataset: str | None = None
+    dataset_config: str | None = None
+    dataset_weights: list[int] | None = None
     split: str = "train"
     save_dir: str = "checkpoints/plt"
     layers: list[int] | None = None
@@ -51,6 +60,7 @@ class PLTConfig:
     revision: str | None = None
     hf_token: str | None = None
     num_workers: int = 0
+    shuffle_seed: int = 42
     log_every: int = 10
 
     @property
@@ -158,7 +168,10 @@ class PLTTrainer:
         processor=None,
     ) -> None:
         self.cfg = cfg
-        self.dataset = dataset
+        self.datasets = list(dataset) if isinstance(dataset, (list, tuple)) else [dataset]
+        self.dataset_weights = cfg.dataset_weights or [1] * len(self.datasets)
+        if len(self.datasets) != len(self.dataset_weights):
+            raise ValueError("Each prepared dataset must have one dataset weight.")
         self.model = model
         self.processor = processor
         self.device = torch.device(
@@ -203,22 +216,25 @@ class PLTTrainer:
         self._losses: dict[str, float] = {}
 
     def fit(self) -> None:
-        dataloader = DataLoader(
-            self.dataset,
-            batch_size=self.cfg.batch_size,
-            shuffle=True,
-            num_workers=self.cfg.num_workers,
-            collate_fn=lambda batch: collate_batch(batch, self.pad_token_id),
-        )
-        data_iter = iter(dataloader)
+        dataloaders = []
+        for index, dataset in enumerate(self.datasets):
+            generator = torch.Generator()
+            generator.manual_seed(self.cfg.shuffle_seed + index)
+            dataloaders.append(
+                DataLoader(
+                    dataset,
+                    batch_size=self.cfg.batch_size,
+                    shuffle=True,
+                    num_workers=self.cfg.num_workers,
+                    collate_fn=lambda batch: collate_batch(batch, self.pad_token_id),
+                    generator=generator,
+                )
+            )
+        data_iter = iter(WeightedBatchIterator(dataloaders, self.dataset_weights))
         pbar = tqdm(total=self.cfg.max_steps, desc="Training PLTs")
 
         while self.global_step < self.cfg.max_steps:
-            try:
-                batch = next(data_iter)
-            except StopIteration:
-                data_iter = iter(dataloader)
-                batch = next(data_iter)
+            batch = next(data_iter)
 
             batch = move_batch_to_device(batch, self.device)
             self._tokens_mask = make_token_mask(batch)
@@ -307,10 +323,24 @@ class PLTTrainer:
 
 
 def train_plt_from_hf(cfg: PLTConfig) -> PLTTrainer:
-    try:
-        from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
-    except ImportError as exc:
-        raise ImportError("Install training dependencies with `pip install -e .[train]`.") from exc
+    if cfg.dataset_config is not None and cfg.dataset is not None:
+        raise ValueError("Set either dataset or dataset_config, not both.")
+    if cfg.dataset_config is not None:
+        sources = load_dataset_config(cfg.dataset_config)
+    elif cfg.dataset is not None:
+        sources = [
+            DatasetSourceConfig(
+                path=cfg.dataset,
+                split=cfg.split,
+                text_column=cfg.text_column,
+                image_column=cfg.image_column,
+                prompt_template=cfg.prompt_template,
+                max_length=cfg.max_length,
+                trust_remote_code=cfg.trust_remote_code,
+            )
+        ]
+    else:
+        raise ValueError("A dataset path/name or dataset_config is required.")
 
     processor = AutoProcessor.from_pretrained(
         cfg.model_name,
@@ -326,61 +356,11 @@ def train_plt_from_hf(cfg: PLTConfig) -> PLTTrainer:
         torch_dtype=cfg.torch_dtype,
     )
 
-    if cfg.dataset is None:
-        raise ValueError("A dataset path or Hugging Face dataset name is required.")
-    dataset_path = Path(cfg.dataset)
-    if dataset_path.exists():
-        dataset = load_from_disk(str(dataset_path))
-    else:
-        dataset = load_dataset(cfg.dataset, split=cfg.split, trust_remote_code=True)
-    if isinstance(dataset, DatasetDict):
-        dataset = dataset[cfg.split]
-    if not isinstance(dataset, Dataset):
-        dataset = dataset.with_format("torch")
-
-    if "input_ids" not in dataset.column_names:
-        dataset = prepare_dataset(dataset, processor, cfg)
-    else:
-        dataset = dataset.with_format("torch")
-
-    trainer = PLTTrainer(cfg, dataset, model, processor)
+    datasets = load_and_prepare_datasets(sources, processor, hf_token=cfg.hf_token)
+    cfg.dataset_weights = [source.weight for source in sources]
+    trainer = PLTTrainer(cfg, datasets, model, processor)
     trainer.fit()
     return trainer
-
-
-def prepare_dataset(dataset, processor, cfg: PLTConfig):
-    remove_columns = list(dataset.column_names)
-    has_images = cfg.image_column is not None and cfg.image_column in dataset.column_names
-
-    def tokenize(batch):
-        texts = batch[cfg.text_column]
-        texts = [format_prompt(text, cfg.prompt_template if has_images else "{text}") for text in texts]
-        kwargs = {
-            "text": texts,
-            "padding": "max_length",
-            "max_length": cfg.max_length,
-            "truncation": True,
-            "return_tensors": "pt",
-        }
-        if has_images:
-            kwargs["images"] = [image.convert("RGB") for image in batch[cfg.image_column]]
-        return processor(**kwargs)
-
-    tokenized = dataset.map(
-        tokenize,
-        batched=True,
-        batch_size=cfg.batch_size,
-        remove_columns=remove_columns,
-    )
-    return tokenized.with_format("torch")
-
-
-def format_prompt(value: Any, template: str) -> str:
-    if isinstance(value, dict):
-        text = value.get("user") or value.get("prompt") or value.get("text") or str(value)
-    else:
-        text = str(value)
-    return template.format(text=text)
 
 
 def find_layer_modules(model: PreTrainedModel) -> tuple[str, nn.ModuleList]:

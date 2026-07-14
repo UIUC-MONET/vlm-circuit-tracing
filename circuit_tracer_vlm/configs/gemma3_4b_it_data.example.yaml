@@ -1,0 +1,42 @@
+# Dataset preparation and batch-level mixing used for the Gemma 3 PLT recipe.
+#
+# Replace the two local paths with the exact image dataset and saved Cauldron
+# subset used for your run. The schedule is deterministic: two image-only
+# batches, two packed-text batches, then one Cauldron conversation batch.
+sources:
+  - path: /path/to/image-dataset
+    split: train
+    weight: 2
+    text_column: null
+    image_column: image
+    prompt_template: |-
+      <start_of_turn>user
+      <start_of_image>Describe this image in detail.<end_of_turn>
+      <start_of_turn>model
+    max_length: 1024
+    map_batch_size: 16
+    padding: false
+
+  - path: EleutherAI/SmolLM2-135M-10B
+    split: train
+    weight: 2
+    text_column: text
+    image_column: null
+    prompt_template: "{text}"
+    max_length: 2048
+    packing: true
+    map_batch_size: 1024
+
+  - path: /path/to/cauldron
+    split: train
+    weight: 1
+    text_column: text
+    image_column: image
+    prompt_template: |-
+      <start_of_turn>user
+      <start_of_image>{user}<end_of_turn>
+      <start_of_turn>model
+      {assistant}<end_of_turn>
+    max_length: 1024
+    map_batch_size: 1
+    padding: false

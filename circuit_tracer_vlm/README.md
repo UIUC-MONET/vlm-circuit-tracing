@@ -167,3 +167,12 @@ In the browser viewer:
 - Hold `G` and click nodes to group them into a supernode.
 
 Image-token nodes show generated attention maps when `attention_maps/` is present in the graph directory.
+
+## Reproducing the Mixed-Data Recipe
+
+For the released run's three-stream data preparation, copy
+configs/gemma3_4b_it_data.example.yaml and pass it with --dataset_config. The
+trainer prepares each source independently and uses deterministic weighted
+round-robin batch selection. The example reproduces the 2:2:1 schedule for
+image-only, packed SmolLM text, and Cauldron image-conversation batches without
+embedding private filesystem paths in the code.

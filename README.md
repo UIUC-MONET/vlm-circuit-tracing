@@ -132,3 +132,20 @@ Use `--layers` only for quick debug runs; attribution requires a PLT for every m
 ## Issues
 
 If you encounter issues, questions, or ambiguities regarding our paper, please contact us or create an issue.
+
+## Reproducing the Mixed-Data Recipe
+
+The released Gemma3 training run used three independently prepared streams
+rather than concatenating datasets: image-only batches, packed text from
+EleutherAI/SmolLM2-135M-10B, and image-conversation batches from a saved
+Cauldron subset. They were selected at the batch level with weights 2:2:1.
+
+Copy and edit circuit_tracer_vlm/configs/gemma3_4b_it_data.example.yaml, then run:
+
+~~~bash
+circuit-tracer train-plt --dataset_config circuit_tracer_vlm/configs/gemma3_4b_it_data.example.yaml --model google/gemma-3-4b-it --batch_size 1 --max_steps 10000 --save_dir ./gemma3-plt
+~~~
+
+Each source independently configures its columns, prompt template, sequence
+length, text packing, and integer sampling weight. Local paths are intentionally
+not hard-coded; replace the placeholders with the datasets used for your run.

@@ -217,7 +217,15 @@ def main():
         help="Train per-layer transcoders and export them in circuit-tracer format.",
     )
     train_parser.add_argument("-m", "--model", default="google/gemma-3-4b-it")
-    train_parser.add_argument("dataset", help="Hugging Face dataset name or local dataset path.")
+    train_parser.add_argument(
+        "dataset",
+        nargs="?",
+        help="Hugging Face dataset name or local dataset path.",
+    )
+    train_parser.add_argument(
+        "--dataset_config",
+        help="YAML file describing one or more weighted dataset sources.",
+    )
     train_parser.add_argument("--split", default="train")
     train_parser.add_argument("--save_dir", default="checkpoints/plt")
     train_parser.add_argument("--layers", nargs="*", type=int)
@@ -255,6 +263,7 @@ def main():
     train_parser.add_argument("--revision")
     train_parser.add_argument("--hf_token")
     train_parser.add_argument("--num_workers", type=int, default=0)
+    train_parser.add_argument("--shuffle_seed", type=int, default=42)
     train_parser.add_argument("--log_every", type=int, default=10)
 
     args = parser.parse_args()
@@ -443,6 +452,7 @@ def run_train_plt(args):
     cfg = PLTConfig(
         model_name=args.model,
         dataset=args.dataset,
+        dataset_config=args.dataset_config,
         split=args.split,
         save_dir=args.save_dir,
         layers=args.layers,
@@ -465,6 +475,7 @@ def run_train_plt(args):
         revision=args.revision,
         hf_token=args.hf_token,
         num_workers=args.num_workers,
+        shuffle_seed=args.shuffle_seed,
         log_every=args.log_every,
     )
     train_plt_from_hf(cfg)
