@@ -97,6 +97,14 @@ circuit-tracer start-server --graph_file_dir ./your_graph --port 8041
 
 Then open `http://localhost:8041`. The open-source server stores annotations in the local graph JSON files; it does not use a database.
 
+Activation examples load by default from
+`Jingcheng/gemma3-4b-it-plt-activations`. The server lazily joins each requested
+Safetensors feature to its Parquet input records. Open the standalone browser at
+`/feature-view.html?layer=<layer>&featureId=<feature>`, or inspect a feature node
+inside a circuit. Override the source with
+`start-server --activation_stats org/repo@revision`. Multimodal records contain
+image references rather than image bytes.
+
 ## Attention Maps
 
 Generate image-token attention maps for the local viewer:

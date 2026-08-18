@@ -68,7 +68,8 @@ window.initCgFeatureDetail = async function({visState, renderAll, data, cgSel}){
       }
       examplesSel.st({opacity: 0})
     } else if (d.feature_type == 'cross layer transcoder') {
-      const scan = data.metadata.scan?.startsWith('custom-') ? data.metadata.transcoder_list[d.layer] : data.metadata.scan;
+      const scan = data.metadata.feature_examples_path ||
+        './features';
       addLogits(d)
       addEmbeddings(d)
       var headerTopRowSel = headerSel.html('').append('div.header-top-row')

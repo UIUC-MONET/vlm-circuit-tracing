@@ -4,6 +4,10 @@
 <link rel='stylesheet' href='./style.css'>
 <title>Features Viewer</title>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/viewerjs/1.11.7/viewer.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/viewerjs/1.11.7/viewer.css" />
+<img id="image" alt="" style="display:none" />
+
 <div class='tooltip tooltip-hidden'></div>
 <div class='link'><a href='./index.html'>← Back to Attribution Graphs</a></div>
 <div class='header'>
@@ -18,6 +22,7 @@
 <script src='https://transformer-circuits.pub/2025/attribution-graphs/static_js/lib/d3.js'></script>
 <script src='https://transformer-circuits.pub/2025/attribution-graphs/static_js/lib/jetpack_2024-07-20.js'></script>
 <script src='https://transformer-circuits.pub/2025/attribution-graphs/static_js/lib/npy_v0.js'></script>
+<script src='https://unpkg.com/pako@2.1.0/dist/pako.min.js'></script>
 
 <script src='./feature_examples/init-feature-examples-list.js'></script>
 <script src='./feature_examples/init-feature-examples-logits.js'></script>
@@ -28,16 +33,20 @@
 <script>
 window.init = async function(){
   // Get model from query params or use default
-  const MODEL = util.params.get('model') || 'gemma-2-2b';
+  const MODEL = util.params.get('model') || 'Jingcheng/gemma3-4b-it-plt-activations';
   
   // Construct base path for feature files
-  const FEATURES_PATH = `./features/${MODEL}`;
+  const FEATURES_PATH = util.params.get('source') || './features';
   
   // State management
   window.visState = window.visState || {
+    layer: +(util.params.get('layer') || 0),
     featureId: util.params.get('featureId') || 0,
     model: MODEL
   };
+
+  const cantorPair = (layer, feature) =>
+    (layer + feature) * (layer + feature + 1) / 2 + feature;
   
   // Setup feature selector
   async function setupFeatureSelector() {
@@ -49,6 +58,20 @@ window.init = async function(){
       .append('div')
       .style('display', 'flex')
       .style('align-items', 'center');
+
+    selectorSel.append('span').text('Layer ');
+    selectorSel.append('input')
+      .classed('layer-input', true)
+      .attr('type', 'number')
+      .attr('min', 0)
+      .attr('value', visState.layer)
+      .on('change', function() {
+        visState.layer = Math.max(0, +this.value);
+        util.params.set('layer', visState.layer);
+        renderSelected();
+      });
+
+    selectorSel.append('span').text(' Feature ').style('margin-left', '8px');
     
     // Previous button
     selectorSel.append('button')
@@ -61,6 +84,7 @@ window.init = async function(){
     
     // Text input for direct feature number entry
     selectorSel.append('input')
+      .classed('feature-input', true)
       .attr('type', 'number')
       .attr('min', 0)
       .attr('value', featureId)
@@ -81,7 +105,7 @@ window.init = async function(){
       });
     
     // Render the selected feature
-    renderFeature(FEATURES_PATH, featureId);
+    renderSelected();
   }
   
   // Update feature and URL
@@ -90,9 +114,13 @@ window.init = async function(){
     util.params.set('featureId', featureId);
     
     // Update input value
-    d3.select('.feature-selector input').property('value', featureId);
+    d3.select('.feature-selector .feature-input').property('value', featureId);
     
-    renderFeature(FEATURES_PATH, featureId);
+    renderSelected();
+  }
+
+  function renderSelected() {
+    renderFeature(FEATURES_PATH, cantorPair(+visState.layer, +visState.featureId));
   }
   
   // Render a feature
@@ -108,7 +136,7 @@ window.init = async function(){
     
     // Update document title to include model name
     const modelName = visState.model.split('/').pop();
-    document.title = `Feature ${featureIndex} - ${modelName} Features Viewer`;
+    document.title = `L${visState.layer}/F${visState.featureId} - ${modelName} Features Viewer`;
     
     // Load and render the selected feature
     featureExamples.renderFeature(path, featureIndex);
@@ -120,6 +148,7 @@ window.init = async function(){
     ev.preventDefault();
     
     const newFeatureId = util.params.get('featureId');
+    const newLayer = util.params.get('layer');
     const newModel = util.params.get('model') || 'default';
     
     if (newModel !== visState.model) {
@@ -130,6 +159,10 @@ window.init = async function(){
     
     if (newFeatureId && newFeatureId !== visState.featureId) {
       updateFeature(+newFeatureId);
+    }
+    if (newLayer !== null && +newLayer !== visState.layer) {
+      visState.layer = Math.max(0, +newLayer);
+      setupFeatureSelector();
     }
   });
   

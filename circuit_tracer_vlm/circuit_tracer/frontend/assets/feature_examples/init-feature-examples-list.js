@@ -140,6 +140,16 @@ window.initFeatureExamplesList = function({renderAll, visState, sel}){
       .st({opacity: exp.is_repeated_datapoint ? .4 : 1});
     const textSel = sel.append('div.text-wrapper');
 
+    if (exp.image_references?.length) {
+      const refs = sel.append('div').classed('image-references', true)
+      refs.append('span').text('Images: ')
+      refs.appendMany('a', exp.image_references)
+        .text(d => d)
+        .attr('href', d => /^https?:\/\//.test(d) ? d : null)
+        .attr('target', d => /^https?:\/\//.test(d) ? '_blank' : null)
+        .attr('rel', d => /^https?:\/\//.test(d) ? 'noopener noreferrer' : null)
+    }
+
     // Build tokenData as you already do (with or without merging)
     let tokenData = mergeHexEscapedMax(exp.tokens, exp.tokens_acts_list);
     tokenData = mergeConsecutiveSameActivations(tokenData);

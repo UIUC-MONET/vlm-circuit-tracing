@@ -128,6 +128,18 @@ def main():
         default=0.98,
         help="Edge threshold for pruning graph files.",
     )
+    attr_parser.add_argument(
+        "--feature_examples",
+        help=(
+            "Activation-example source for the viewer, usually a Hugging Face "
+            "repository as org/repo or org/repo@revision."
+        ),
+    )
+    attr_parser.add_argument(
+        "--activation_stats",
+        default="Jingcheng/gemma3-4b-it-plt-activations",
+        help="Hugging Face repository containing Safetensors activation statistics.",
+    )
 
     # Server arguments
     attr_parser.add_argument(
@@ -157,6 +169,11 @@ def main():
         "--host",
         default="127.0.0.1",
         help="Host interface for the local server.",
+    )
+    server_parser.add_argument(
+        "--activation_stats",
+        default="Jingcheng/gemma3-4b-it-plt-activations",
+        help="Hugging Face repository containing Safetensors activation statistics.",
     )
 
     # Attention maps subcommand
@@ -384,6 +401,7 @@ def run_attribution(args, parser):
             output_path=args.graph_file_dir,
             node_threshold=args.node_threshold,
             edge_threshold=args.edge_threshold,
+            feature_examples_path=args.feature_examples,
         )
         logging.info(f"Graph JSON files written to {args.graph_file_dir}")
 
@@ -486,7 +504,12 @@ def run_server(args):
 
     logging.info(f"Starting server on port {args.port}...")
     logging.info(f"Serving data from: {os.path.abspath(args.graph_file_dir)}")
-    server = serve(data_dir=args.graph_file_dir, port=args.port, host=args.host)
+    server = serve(
+        data_dir=args.graph_file_dir,
+        port=args.port,
+        host=args.host,
+        activation_stats=args.activation_stats,
+    )
     try:
         logging.info("Press Ctrl+C to stop the server.")
         while True:

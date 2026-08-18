@@ -102,7 +102,16 @@ def create_used_nodes_and_edges(graph: Graph, nodes, edge_mask):
     return used_nodes, used_edges
 
 
-def build_model(graph: Graph, used_nodes, used_edges, slug, scan, node_threshold, tokenizer):
+def build_model(
+    graph: Graph,
+    used_nodes,
+    used_edges,
+    slug,
+    scan,
+    node_threshold,
+    tokenizer,
+    feature_examples_path=None,
+):
     """Build the full model object."""
     start_time = time.time()
 
@@ -121,6 +130,7 @@ def build_model(graph: Graph, used_nodes, used_edges, slug, scan, node_threshold
         prompt_tokens=[tokenizer.decode(t) for t in graph.input_tokens],
         prompt=graph.input_string,
         node_threshold=node_threshold,
+        feature_examples_path=feature_examples_path,
     )
 
     qparams = QParams(
@@ -151,6 +161,7 @@ def create_graph_files(
     scan=None,
     node_threshold=0.8,
     edge_threshold=0.98,
+    feature_examples_path=None,
 ):
     total_start_time = time.time()
 
@@ -182,7 +193,16 @@ def create_graph_files(
     tokenizer = AutoTokenizer.from_pretrained(graph.cfg.tokenizer_name)
     nodes = create_nodes(graph, node_mask, tokenizer, cumulative_scores)
     used_nodes, used_edges = create_used_nodes_and_edges(graph, nodes, edge_mask)
-    model = build_model(graph, used_nodes, used_edges, slug, scan, node_threshold, tokenizer)
+    model = build_model(
+        graph,
+        used_nodes,
+        used_edges,
+        slug,
+        scan,
+        node_threshold,
+        tokenizer,
+        feature_examples_path,
+    )
 
     # Write the output locally
     with open(os.path.join(output_path, f"{slug}.json"), "w") as f:

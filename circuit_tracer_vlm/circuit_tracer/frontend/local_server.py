@@ -10,6 +10,11 @@ import threading
 from importlib.resources import files
 from pathlib import Path
 
+from circuit_tracer.frontend.activation_stats import (
+    ActivationStatsStore,
+    DEFAULT_ACTIVATION_STATS_REPO,
+)
+
 logger = logging.getLogger(__name__)
 logger.propagate = False
 
@@ -33,8 +38,9 @@ class ReusableTCPServer(socketserver.TCPServer):
 
 # Create handler for serving circuit graph data
 class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, frontend_dir, data_dir, **kwargs):
+    def __init__(self, *args, frontend_dir, data_dir, activation_store, **kwargs):
         self.data_dir = Path(data_dir).resolve()
+        self.activation_store = activation_store
         super().__init__(*args, directory=str(frontend_dir), **kwargs)
 
     def _resolve_data_path(self, rel_path: str) -> Path | None:
@@ -48,7 +54,9 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         """Override to disable caching for certain files."""
-        if self.path.endswith((".json", ".csv", ".js", ".css")) or self.path.startswith(("/data/", "/graph_data/")):
+        if self.path.endswith((".json", ".csv", ".js", ".css")) or self.path.startswith(
+            ("/data/", "/graph_data/")
+        ):
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
@@ -70,6 +78,22 @@ class CircuitGraphHandler(http.server.SimpleHTTPRequestHandler):
 
     def _do_GET(self):
         logger.info(f"Received request for {self.path}")
+
+        if self.path.startswith("/features/") and self.path.endswith(".json"):
+            feature_name = self.path[len("/features/") :].split("?", 1)[0]
+            try:
+                feature_index = int(feature_name.removesuffix(".json"))
+                content = json.dumps(self.activation_store.feature(feature_index)).encode()
+            except (KeyError, ValueError):
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
 
         # Handle data and graph_data requests from local storage
         if self.path.startswith(("/data/", "/graph_data/")):
@@ -237,7 +261,13 @@ class Server:
         return self.logs
 
 
-def serve(data_dir, frontend_dir=None, port=8032, host="127.0.0.1"):
+def serve(
+    data_dir,
+    frontend_dir=None,
+    port=8032,
+    host="127.0.0.1",
+    activation_stats=DEFAULT_ACTIVATION_STATS_REPO,
+):
     """Start a local HTTP server in a separate thread.
 
     Args:
@@ -245,6 +275,7 @@ def serve(data_dir, frontend_dir=None, port=8032, host="127.0.0.1"):
         frontend_dir: Directory containing frontend files. Defaults to DEFAULT_FRONTEND_DIR.
         port: Port to serve on. Defaults to 8032.
         host: Host interface to bind. Defaults to localhost only.
+        activation_stats: Hugging Face activation-stat repository.
 
     Returns:
         Server object with a stop() method to shut down the server.
@@ -260,7 +291,13 @@ def serve(data_dir, frontend_dir=None, port=8032, host="127.0.0.1"):
     logger.info(f"Serving files from: {frontend_dir}")
 
     # Create a partially applied handler class with configured directories
-    handler = functools.partial(CircuitGraphHandler, frontend_dir=frontend_dir, data_dir=data_dir)
+    activation_store = ActivationStatsStore(activation_stats)
+    handler = functools.partial(
+        CircuitGraphHandler,
+        frontend_dir=frontend_dir,
+        data_dir=data_dir,
+        activation_store=activation_store,
+    )
 
     httpd = ReusableTCPServer((host, port), handler)
 

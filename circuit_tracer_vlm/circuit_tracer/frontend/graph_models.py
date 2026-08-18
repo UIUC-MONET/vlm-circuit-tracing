@@ -9,6 +9,7 @@ class Metadata(BaseModel):
     prompt: str
     node_threshold: float | None = None
     schema_version: int | None = 1
+    feature_examples_path: str | None = None
 
 
 class QParams(BaseModel):

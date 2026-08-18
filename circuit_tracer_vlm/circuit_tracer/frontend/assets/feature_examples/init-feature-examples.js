@@ -82,7 +82,11 @@ window.initFeatureExamples = function({
       throw new Error(`Feature ${featureIndex} not found in index`)
     }
 
-    return await util.getFile(hfUrl(scan, binFilename), true, 'bin', `bytes=${startByte}-${endByte}`)
+    if (startByte === undefined || endByte === undefined || endByte <= startByte) {
+      throw new Error(`Feature ${featureIndex} not found in index`)
+    }
+
+    return await util.getFile(hfUrl(scan, binFilename), true, 'bin', `bytes=${startByte}-${endByte - 1}`)
   }
 
 
@@ -91,8 +95,10 @@ window.initFeatureExamples = function({
       var feature = await  util.getFile(`${scan}/${featureIndex}.json`)
     } else if (await indexFileExists(scan)){
       var feature = await loadFeatureFromBinary(scan, featureIndex)
+    } else if (scan.includes('/')) {
+      var feature = await util.getFile(hfUrl(scan, `${featureIndex}.json`))
     } else {
-      var feature = await  util.getFile(`./features/${scan}/${featureIndex}.json`)
+      var feature = await util.getFile(`./features/${scan}/${featureIndex}.json`)
     }
 
     if (feature.act_min === undefined) {

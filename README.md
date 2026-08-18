@@ -95,6 +95,40 @@ circuit-tracer attribute \
 
 The open-source viewer stores annotations in the local graph JSON files only. It does not require or use a database.
 
+### Activation examples
+
+The local server loads activation examples from
+[`Jingcheng/gemma3-4b-it-plt-activations`](https://huggingface.co/Jingcheng/gemma3-4b-it-plt-activations)
+by default. No extra argument is required. Safetensors layers and the relevant
+Parquet input shards are downloaded lazily and cached by `huggingface_hub`.
+
+To use another repository with the same manifest layout:
+
+```bash
+circuit-tracer start-server \
+  --graph_file_dir ./your_graph \
+  --activation_stats your-org/activation-stats@revision
+```
+
+The same data has a standalone, deliberately small feature viewer:
+
+```text
+http://localhost:8041/feature-view.html?layer=0&featureId=0
+```
+
+The viewer converts the layer and feature number into the frontend's
+Cantor-paired identifier. Circuit node details call the same loader, so both
+views show identical examples. Image examples retain `image_references` and the
+activation artifact contains no image bytes.
+
+The published format keeps numeric state in layer-sharded Safetensors: feature
+IDs, firing counts, top activations, input IDs, and token positions. Parquet
+holds variable-length tokens, formatted prompts, metadata, and image pointers.
+The server joins them only for the feature being viewed.
+
+The older `--feature_examples` option remains available for pre-rendered JSON
+or range-indexed frontend exports.
+
 ## Attention Maps
 
 The local graph frontend can display one image-token map for each visual token. To generate these maps for an existing graph directory:

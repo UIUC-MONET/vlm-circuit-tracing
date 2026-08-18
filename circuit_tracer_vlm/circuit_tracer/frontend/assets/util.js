@@ -43,7 +43,7 @@ window.util = (function () {
     var __datacache = window.__datacache = window.__datacache || {}
 
     if (path.startsWith('./features/')) {
-      path = path.replace('./features/', 'http://localhost:5001/features/')
+      path = path.replace('./features/', '/features/')
     }
 
     if (!window.isLocalServing){

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Example(BaseModel):
@@ -6,6 +6,8 @@ class Example(BaseModel):
     train_token_ind: int
     is_repeated_datapoint: bool
     tokens: list[str]
+    image_references: list[str] = Field(default_factory=list)
+    example_id: str | None = None
 
 
 class ExamplesQuantile(BaseModel):
@@ -21,6 +23,8 @@ class Model(BaseModel):
     bottom_logits: list[str]
     act_min: float
     act_max: float
-    quantile_values: list[float]
-    histogram: list[float]
+    quantile_values: list[float] = Field(default_factory=list)
+    histogram: list[float] = Field(default_factory=list)
     activation_frequency: float
+    firing_count: int | None = None
+    isDead: bool = False
